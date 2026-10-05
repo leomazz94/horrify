@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://film-horror-da-vedere.leomazz94.chatgpt.site/sitemap.xml

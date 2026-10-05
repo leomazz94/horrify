@@ -1,0 +1,34 @@
+/* Only the new project link and public cinema subtitle affect the Home. */
+.home-menu-with-project{gap:clamp(10px,1.5vw,26px)}
+#cinema .radar-subtitle{font:500 clamp(1.05rem,1.5vw,1.3rem)/1.45 Manrope,Arial,sans-serif;color:#e0d3e6;margin:6px 0 14px}
+.project-footer-nav{margin:22px 0 14px}.project-footer-nav a{color:#d3b3dd;text-underline-offset:5px}
+/* Standalone narrative page: existing fonts, black surfaces, restrained violet. */
+@font-face{font-family:Manrope;src:url('fonts/manrope.woff2') format('woff2');font-style:normal;font-weight:400 800;font-display:swap}
+@font-face{font-family:Cormorant;src:url('fonts/cormorant-garamond.woff2') format('woff2');font-style:normal;font-weight:500 700;font-display:swap}
+.about-page{margin:0;background:#080809;color:#eeeaf0;font:400 16px/1.7 Manrope,Arial,sans-serif;color-scheme:dark}
+.about-page *{box-sizing:border-box}.about-page a{color:inherit}.about-page a:focus-visible{outline:2px solid #cba7dd;outline-offset:6px}
+.about-shell{width:min(1240px,88%);margin:auto}
+.about-header{border-bottom:1px solid #29242e;background:#080809}
+.about-header .about-shell{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px 0}
+.about-logo{font:700 clamp(2.3rem,4vw,3.6rem)/1 'Grenze Gotisch',Georgia,serif;text-decoration:none;letter-spacing:-.045em}
+.about-header nav{display:flex;flex-wrap:wrap;gap:24px;font-size:.85rem}.about-header nav a{text-decoration:none;color:#c7bbcd}
+.about-opening{position:relative;isolation:isolate;padding:62px 0 42px;border-bottom:1px solid #302736;overflow:hidden}
+.about-opening:before{content:'';position:absolute;z-index:-1;inset:0;background:linear-gradient(90deg,#080809 30%,#080809bb 66%,#08080985),url('home-cemetery.png') 90% 28%/cover no-repeat;opacity:.55;pointer-events:none}
+.about-eyebrow{font-size:.68rem;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:#ad8abc;margin:0 0 16px}
+.about-opening h1{font:600 clamp(3.2rem,7vw,6rem)/1.1 'Grenze Gotisch',Georgia,serif;margin:0 0 34px;max-width:12ch;color:#e4d8e9}
+.about-chapter-nav{display:flex;flex-wrap:wrap;gap:12px 30px;font-size:.73rem;text-transform:uppercase;letter-spacing:.1em}
+.about-chapter-nav a{text-decoration:none;color:#cfc3d5}.about-chapter-nav span{color:#9062a4;margin-right:8px}
+.about-chapter{position:relative;padding:70px 0;border-bottom:1px solid #302736;scroll-margin-top:20px}
+.about-origin{display:grid;grid-template-columns:minmax(140px,1fr) minmax(0,3fr);gap:55px}
+.about-chapter-mark{font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:#ac8bbb;line-height:1.5}
+.about-chapter-number{display:block;font:500 4.7rem/1 Cormorant,Georgia,serif;color:#5e456a;margin-bottom:20px}
+.about-chapter h2{font:600 clamp(2.1rem,4vw,3.6rem)/1.12 Cormorant,Georgia,serif;letter-spacing:-.015em;color:#e7dde9;margin:0 0 26px;max-width:24ch}
+.about-copy{max-width:66ch}.about-copy p{color:#c6becb;margin:0 0 22px;font-size:clamp(.97rem,1.25vw,1.1rem);line-height:1.85;overflow-wrap:break-word}
+.about-copy p:last-child{margin-bottom:0}
+.about-mission{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:70px;align-items:center}
+.about-mission h2{color:#d3b3dd;border-left:2px solid #85509c;padding-left:26px;margin-top:26px}
+.about-mission .about-copy{padding-top:45px}
+.about-vision{border-bottom:0}
+.about-return{border-top:1px solid #302736;padding:30px 0 42px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:20px;color:#bbadC4;font-size:.84rem}
+.about-return a{text-decoration:none}.about-return a:hover,.about-chapter-nav a:hover{color:#ead4f4}
+@media(max-width:700px){.about-header .about-shell{padding:20px 0;gap:18px}.about-header nav{gap:14px;font-size:.75rem}.about-opening{padding:42px 0 32px}.about-opening h1{font-size:3.25rem;margin-bottom:27px}.about-chapter-nav{gap:10px 18px;font-size:.65rem}.about-chapter{padding:44px 0}.about-origin,.about-mission{grid-template-columns:1fr;gap:22px}.about-chapter-number{font-size:3.2rem;display:inline-block;margin:0 16px 0 0;vertical-align:middle}.about-chapter h2{font-size:2.25rem;margin-bottom:22px;max-width:none}.about-mission h2{margin-top:22px;padding-left:18px}.about-mission .about-copy{padding-top:0}.about-copy p{font-size:1rem;line-height:1.8}.about-return{padding-bottom:32px}}
