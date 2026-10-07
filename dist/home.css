@@ -13,7 +13,7 @@
 .home-challenges{display:grid;place-items:center;width:28px;height:40px;color:#e8e2e6}
 .home-challenges svg{width:25px;height:28px;fill:none;stroke:currentColor;stroke-width:1.5}
 .home-actions #account-open{width:57px;height:57px;min-width:57px;border:1px solid #a876d0;border-radius:50%;background:#151019 url('home-skull.svg') center/38px 38px no-repeat;font-size:0;cursor:pointer;color:transparent;padding:0}
-.home-hero.mast{position:relative;isolation:isolate;background:#080809 url('home-edgar-cover-v6.webp') center center/cover no-repeat;border:0;overflow:hidden}
+.home-hero.mast{position:relative;isolation:isolate;background:#080809 url('home-edgar-cover-v7.webp') center center/cover no-repeat;border:0;overflow:hidden}
 .home-hero.mast:before{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,#05050770,transparent 53%),linear-gradient(0deg,#080809,transparent 17%);pointer-events:none;animation:none;opacity:1}
 .home-hero.mast:after{display:none}
 .home-hero.mast>.shell{min-height:clamp(490px,40vw,700px);display:flex;justify-content:flex-start;align-items:flex-start;padding-top:80px;padding-bottom:85px}
