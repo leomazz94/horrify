@@ -1,0 +1,38 @@
+name: Build Horror Radar Test Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [test/horror-radar-v14]
+    paths:
+      - 'dist/horror-radar-test.html'
+      - 'dist/supabase.js'
+      - 'dist/catalog.js'
+      - '.github/workflows/horror-radar-preview.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v6
+      - name: Validate isolated test page
+        run: |
+          test -f dist/horror-radar-test.html
+          grep -q 'HORROR RADAR · COLLAUDO V14' dist/horror-radar-test.html
+          grep -q 'noindex,nofollow' dist/horror-radar-test.html
+      - name: Package browser preview
+        run: |
+          mkdir -p preview
+          cp dist/horror-radar-test.html preview/index.html
+          cp dist/supabase.js preview/supabase.js
+          cp dist/catalog.js preview/catalog.js
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: horror-radar-v14-preview
+          path: preview
+          retention-days: 7
