@@ -59,3 +59,11 @@ main.shell{max-width:1753px;padding-left:5.8%;padding-right:5.8%;padding-top:0}
 .reaper-stage{width:72px;right:-8px}
 .reaper-ground{left:-21px;width:99px;height:77px;--cinema-scale:.64}
 }
+
+/* Keep the account action readable next to Edgar. */
+.home-actions #account-open{display:flex;align-items:center;gap:9px;width:auto;min-width:0;height:auto;border:0;border-radius:0;background:none;color:#eee5f2;font-size:14px;line-height:1.2;white-space:nowrap;padding:0}
+.home-actions #account-open:before{content:'';display:block;flex:0 0 57px;width:57px;height:57px;border:1px solid #a876d0;border-radius:50%;background:#151019 url('home-edgar-account-v11.svg') center/38px 38px no-repeat}
+@media(max-width:1100px){.home-actions #account-open{font-size:13px;gap:7px}.home-actions #account-open:before{flex-basis:44px;width:44px;height:44px;background-size:31px}}
+@media(max-width:650px){.home-actions{gap:10px}}
+@media(max-width:420px){.home-logo{font-size:32px}}
+@media(max-width:360px){.home-logo{font-size:28px}.home-header-inner{gap:8px}.home-actions #account-open{font-size:12px}}
