@@ -49,3 +49,13 @@ main.shell{max-width:1753px;padding-left:5.8%;padding-right:5.8%;padding-top:0}
 @media(max-width:1100px){.home-menu.home-project-menu{order:3;justify-content:flex-start}.home-search{order:3}.home-actions{margin-left:auto;order:2}.home-logo{order:1}}
 @media(max-width:650px){.home-search{flex:1 1 calc(100% - 100px)}.home-menu.home-project-menu a{white-space:nowrap}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.home-nav.discovery-nav a{transition:none}}
+
+/* Mobile framing: show the ticket gesture without the desktop close crop. */
+@media(max-width:650px){
+.home-hero.mast{background-size:auto 320px;background-position:56% bottom}
+.home-hero.mast:before{background:linear-gradient(180deg,#080809 0%,#080809 25%,transparent 53%),linear-gradient(0deg,#080809,transparent 13%)}
+.home-hero.mast>.shell{min-height:520px;padding-top:36px;padding-bottom:240px}
+.home-nav.discovery-nav{margin-top:-20px}
+.reaper-stage{width:72px;right:-8px}
+.reaper-ground{left:-21px;width:99px;height:77px;--cinema-scale:.64}
+}
