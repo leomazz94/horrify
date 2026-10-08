@@ -15,10 +15,11 @@ with open(sys.argv[1],encoding="utf-8") as f:
     line=line.lstrip(chr(30)).strip()
     if not line:continue
     obj=json.loads(line); props=obj.get("properties") or {}
-    if props.get("amenity")!="cinema" or not props.get("name"):continue
+    if not props.get("name"):continue
     osm_id=str(obj.get("id") or "")
-    if "/" not in osm_id:continue
-    osm_type,number=osm_id.split("/",1)
+    if "/" in osm_id:osm_type,number=osm_id.split("/",1)
+    elif osm_id.isdigit():osm_type,number=obj.get("type","node"),osm_id
+    else:continue
     if osm_type not in ("node","way","relation") or not number.isdigit():continue
     geom=obj.get("geometry")
     if not geom:continue
@@ -30,4 +31,5 @@ with open(sys.argv[1],encoding="utf-8") as f:
     batch.append(row)
     if len(batch)>=200:upload(batch);count+=len(batch);batch=[]
 if batch:upload(batch);count+=len(batch)
+if count==0:raise RuntimeError("No cinemas parsed from GeoJSON export; refusing silent success")
 print(f"Imported or updated {count} OSM cinemas")
