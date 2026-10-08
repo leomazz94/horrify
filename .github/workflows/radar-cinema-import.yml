@@ -22,6 +22,28 @@ jobs:
         run: |
           osmium tags-filter italy.osm.pbf nwr/amenity=cinema -o cinemas.osm.pbf --overwrite
           osmium export cinemas.osm.pbf -f geojsonseq -o cinemas.geojsonseq --overwrite
+      - name: Diagnose cinema export structure
+        run: |
+          python - <<'PY'
+          import json
+          from collections import Counter
+          counts=Counter()
+          samples=[]
+          with open("cinemas.geojsonseq",encoding="utf-8") as f:
+              for line in f:
+                  line=line.lstrip(chr(30)).strip()
+                  if not line: continue
+                  counts["features"]+=1
+                  obj=json.loads(line)
+                  props=obj.get("properties") or {}
+                  counts["with_name"]+=bool(props.get("name"))
+                  counts["with_geometry"]+=bool(obj.get("geometry"))
+                  if len(samples)<3:
+                      samples.append({"id_pattern":str(obj.get("id",""))[:3],"type":str(obj.get("type")),"properties_keys":sorted(props.keys())[:20],"geometry_type":(obj.get("geometry") or {}).get("type")})
+          print("Counts:",dict(counts))
+          print("Structure samples (no personal data):",json.dumps(samples))
+          if counts["features"]==0:raise RuntimeError("Osmium exported no features")
+          PY
       - name: Import to Supabase
         env:
           SUPABASE_URL: ${{ secrets.HORRIFY_SUPABASE_URL }}
