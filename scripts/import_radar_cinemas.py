@@ -17,9 +17,15 @@ with open(sys.argv[1],encoding="utf-8") as f:
     obj=json.loads(line); props=obj.get("properties") or {}
     if not props.get("name"):continue
     osm_id=str(obj.get("id") or "")
-    if "/" in osm_id:osm_type,number=osm_id.split("/",1)
-    elif osm_id.isdigit():osm_type,number=obj.get("type","node"),osm_id
-    else:continue
+    if "/" in osm_id:
+        osm_type,number=osm_id.split("/",1)
+    elif len(osm_id)>1 and osm_id[0] in "nwr" and osm_id[1:].isdigit():
+        osm_type={"n":"node","w":"way","r":"relation"}[osm_id[0]]
+        number=osm_id[1:]
+    elif osm_id.isdigit() and obj.get("type") in ("node","way","relation"):
+        osm_type,number=obj["type"],osm_id
+    else:
+        continue
     if osm_type not in ("node","way","relation") or not number.isdigit():continue
     geom=obj.get("geometry")
     if not geom:continue
