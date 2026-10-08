@@ -1,6 +1,6 @@
 /* Refresh without deployment, preserving search and selected filters. */
 (() => {
-  let inFlight=null,loaded=false,discoveryMeta={checkedAt:'2026-10-01',cinemaValidUntil:'2026-10-07'};
+  let inFlight=null,loaded=false,discoveryMeta={checkedAt:'2026-10-01',cinemaValidUntil:'2026-10-07'},manualCinema=[];
   const notice=document.getElementById('catalog-message');
   async function refresh(){
     if(inFlight)return inFlight;
@@ -9,7 +9,9 @@
         const data=await HorrifyCatalog.load();
         catalogFilms=data.films;
         baseFilms=catalogFilms.filter(f=>f.state==='archive');
-        renderDiscovery({...discoveryMeta,movies:catalogFilms.filter(f=>f.state!=='archive')});
+        // Temporary nationwide cinema listings come exclusively from the manually verified JSON.
+        // Supabase may still contain expired cinema entries; do not merge those into Horror Radar.
+        renderDiscovery({...discoveryMeta,movies:[...manualCinema,...catalogFilms.filter(f=>f.state==='demand')]});
         accounts.updateCatalog(data.rows);
         loaded=true;notice.hidden=true;
       }catch{
@@ -21,7 +23,7 @@
     return inFlight;
   }
   Promise.all([
-    fetch('./discovery.json').then(r=>r.ok?r.json():Promise.reject()).then(({movies,...meta})=>{discoveryMeta=meta}).catch(()=>{}),
+    fetch('./discovery.json',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(({movies,...meta})=>{discoveryMeta=meta;manualCinema=(movies||[]).filter(f=>f.state==='cinema')}).catch(()=>{}),
     fetch('./film-clues.json').then(r=>r.ok?r.json():Promise.reject()).then(data=>{clues=data}).catch(()=>{})
   ]).then(refresh);
   setInterval(()=>{if(!document.hidden)refresh()},60000);
