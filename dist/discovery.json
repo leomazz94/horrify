@@ -1,48 +1,32 @@
 {
-  "checkedAt": "2026-10-01",
-  "cinemaValidUntil": "2026-10-07",
+  "checkedAt": "2026-10-08",
+  "cinemaValidUntil": "2026-10-14",
   "movies": [
     {
-      "id": "recent-resident-evil-2026",
-      "title": "Resident Evil",
+      "id": "recent-mammina-2026",
+      "title": "Mammina",
       "year": 2026,
-      "director": "Zach Cregger",
-      "firstRelease": "2026-09-17",
+      "director": "Rob Savage",
+      "firstRelease": "2026-10-08",
       "state": "cinema",
       "recommended": false,
       "tomato": null,
-      "cinemaValidUntil": "2026-10-04",
-      "cinemaUrl": "https://www.oggiacomo.it/eventi/Resident-Evil-00002/",
-      "sourceUrl": "https://www.oggiacomo.it/eventi/Resident-Evil-00002/",
-      "poster": "https://mr.comingsoon.it/imgdb/locandine/235x336/68600.jpg"
-    },
-    {
-      "id": "recent-onslaught-2026",
-      "title": "Onslaught - Assalto finale",
-      "year": 2026,
-      "director": "Adam Wingard",
-      "firstRelease": "2026-10-01",
-      "state": "cinema",
-      "recommended": false,
-      "tomato": null,
-      "cinemaValidUntil": "2026-10-07",
-      "cinemaUrl": "https://www.multisalaimpero.com/film/?title=onslaught-assalto-finale",
-      "sourceUrl": "https://www.multisalaimpero.com/film/?title=onslaught-assalto-finale",
-      "poster": "https://cdn.18tickets.net/impero/uploads/film/playbill/144635/66ae9128-d8f3-4115-a78a-0d510502addb.jpg"
+      "cinemaValidUntil": "2026-10-14",
+      "cinemaUrl": "https://www.multisalaodeon.com/evento/mammina/",
+      "sourceUrl": "https://www.multisalaodeon.com/evento/mammina/"
     },
     {
       "id": "recent-her-private-hell-2026",
       "title": "Her Private Hell",
       "year": 2026,
       "director": "Nicolas Winding Refn",
-      "firstRelease": "2026-07-24",
+      "firstRelease": "2026-10-01",
       "state": "cinema",
       "recommended": false,
       "tomato": null,
-      "cinemaValidUntil": "2026-10-07",
-      "cinemaUrl": "https://www.cinetecamilano.it/film/her-private-hell/",
-      "sourceUrl": "https://www.cinetecamilano.it/film/her-private-hell/",
-      "poster": "https://mr.comingsoon.it/imgdb/locandine/235x336/68768.jpg"
+      "cinemaValidUntil": "2026-10-14",
+      "cinemaUrl": "https://cinemaaquila.it/film/",
+      "sourceUrl": "https://cinemaaquila.it/film/"
     },
     {
       "id": "recent-send-help-2026",
