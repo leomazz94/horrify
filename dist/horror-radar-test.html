@@ -2,17 +2,22 @@
 <html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>HORRIFY · Horror Radar Test</title>
 <style>body{margin:0;background:#090909;color:#eee;font:16px system-ui;max-width:980px;padding:32px;margin:auto}h1{letter-spacing:.08em}button{background:#a40000;color:#fff;border:0;padding:12px 18px;font-weight:700;cursor:pointer}.muted{color:#aaa}.card{border:1px solid #333;padding:16px;margin:12px 0;background:#111}.ok{color:#86d993}.warn{color:#ffcc66}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#050505;padding:14px;border:1px solid #222}</style></head>
 <body><h1>HORROR RADAR · COLLAUDO V14</h1><p class="muted">Pagina tecnica isolata. La posizione viene usata solo per questa richiesta e non viene salvata da Horror Radar.</p>
-<button id="run">Usa la mia posizione e testa</button><p id="status"></p><section id="results"></section><details><summary>Diagnostica</summary><pre id="debug"></pre></details>
+<p id="authStatus" class="muted">Controllo accesso HORRIFY…</p><p><a href="./" style="color:#ffcc66">Accedi a HORRIFY dalla homepage</a> e poi torna a questa pagina se non hai una sessione attiva.</p><button id="run">Usa la mia posizione e testa</button><p id="status"></p><section id="results"></section><details><summary>Diagnostica</summary><pre id="debug"></pre></details>
 <script src="supabase.js"></script><script src="catalog.js"></script><script>
+const authStatus=document.getElementById('authStatus');
+(async()=>{try{const {data:{session},error}=await horrifyDb.auth.getSession();authStatus.textContent=error?'Verifica sessione non riuscita':session?'Sessione HORRIFY attiva. Puoi iniziare il test.':'Non sei autenticato in questa preview. Accedi dalla homepage prima del test.';}catch(e){authStatus.textContent='Impossibile verificare la sessione.';}})();
 const statusEl=document.getElementById('status'),results=document.getElementById('results'),debug=document.getElementById('debug');
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 document.getElementById('run').onclick=async()=>{
- results.innerHTML='';debug.textContent='';statusEl.textContent='Richiesta posizione…';
+ results.innerHTML='';debug.textContent='';statusEl.textContent='Verifica accesso…';
  try{
+  const {data:{session},error:sessionError}=await horrifyDb.auth.getSession();
+  if(sessionError||!session?.access_token)throw new Error('Accesso richiesto: effettua il login a HORRIFY su questa preview, poi riprova.');
+  statusEl.textContent='Richiesta posizione…';
   const pos=await new Promise((ok,no)=>navigator.geolocation.getCurrentPosition(ok,no,{enableHighAccuracy:false,timeout:12000,maximumAge:300000}));
   statusEl.textContent='Edgar sta cercando gli horror entro 50 km da te…';
   const {data,error}=await horrifyDb.functions.invoke('horror-radar-test',{body:{mode:'discover_radar',lat:pos.coords.latitude,lon:pos.coords.longitude,radiusKm:50}});
-  if(error)throw error;
+  if(error){const response=error.context;let details='';try{details=JSON.stringify(await response?.clone?.().json?.())}catch(_){}throw new Error('Supabase HTTP '+(response?.status||'sconosciuto')+(details?' — '+details:''));}
   const rows=data?.verifiedResults||[];
   statusEl.innerHTML=rows.length?'<span class="ok">'+rows.length+' proiezioni horror verificate.</span>':'Nessuna programmazione horror verificata trovata.';
   results.innerHTML=rows.map(r=>'<article class="card"><strong>'+esc(r.movieTitle||r.title)+'</strong><div>'+esc(r.cinemaName)+' · '+esc(r.distanceKm)+' km</div><div>'+esc(r.date)+' · '+esc((r.showtimes||[]).join(' · '))+'</div><div class="muted">'+esc(r.sourceLabel||r.sourceType)+'</div>'+(r.verificationWarning?'<div class="warn">'+esc(r.verificationWarning)+'</div>':'')+'</article>').join('');
