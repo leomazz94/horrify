@@ -43,6 +43,7 @@ jobs:
           print("Counts:",dict(counts))
           print("Structure samples (no personal data):",json.dumps(samples))
           if counts["features"]==0:raise RuntimeError("Osmium exported no features")
+          if not any(s["id_pattern"] for s in samples):raise RuntimeError("OSM identifiers missing: refusing import")
           PY
       - name: Import to Supabase
         env:
