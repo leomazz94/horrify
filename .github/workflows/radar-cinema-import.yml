@@ -21,7 +21,7 @@ jobs:
       - name: Filter cinemas and export GeoJSON sequence
         run: |
           osmium tags-filter italy.osm.pbf nwr/amenity=cinema -o cinemas.osm.pbf --overwrite
-          osmium export cinemas.osm.pbf -f geojsonseq -o cinemas.geojsonseq --overwrite
+          osmium export cinemas.osm.pbf -f geojsonseq --add-unique-id=type_id -o cinemas.geojsonseq --overwrite
       - name: Diagnose cinema export structure
         run: |
           python - <<'PY'
