@@ -12,7 +12,7 @@ def upload(rows):
         if resp.status not in (200,201,204):raise RuntimeError("Supabase import failed")
 with open(sys.argv[1],encoding="utf-8") as f:
  for line in f:
-    line=line.lstrip("\\x1e").strip()\n    if not line:continue\n    obj=json.loads(line); props=obj.get("properties") or {}
+    line=line.lstrip(chr(30)).strip()\n    if not line:continue\n    obj=json.loads(line); props=obj.get("properties") or {}
     if props.get("amenity")!="cinema" or not props.get("name"):continue
     osm_id=str(obj.get("id") or "")
     if "/" not in osm_id:continue
