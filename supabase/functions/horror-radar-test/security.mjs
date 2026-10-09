@@ -198,7 +198,7 @@ export async function assertPublicDestination(raw, base, resolveHost) {
 
 // fetch() replacement for third-party pages: validates the destination, follows redirects manually
 // and re-validates every hop. One deadline covers the whole chain, like the original fetch timeout.
-export function createSafeFetch({ fetchImpl, resolveHost, maxRedirects = 5, log = () => {} }) {
+export function createSafeFetch({ fetchImpl, resolveHost, maxRedirects = 5, log = (_event, _data) => {} }) {
   return async function safeFetch(rawUrl, { headers = {}, timeoutMs = 6500 } = {}) {
     const signal = AbortSignal.timeout(timeoutMs);
     let current = String(rawUrl), base;
