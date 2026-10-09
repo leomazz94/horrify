@@ -1,21 +1,45 @@
 name: HORRIFY cinema geographic import
+# Manual only. "prepare" extracts and validates the data without any credentials (dry run).
+# "import" runs only for mode=import on main, in the protected "radar-import" environment,
+# and writes exactly the file that "prepare" validated. Script: scripts/import_radar_cinemas.py.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run: extract and validate only, no database access. import: write to Supabase after environment approval."
+        type: choice
+        options: [dry-run, import]
+        default: dry-run
+      max_drop_percent:
+        description: "Import only: maximum allowed decrease (0-100) vs. OpenStreetMap cinemas already in radar_cinemas. Required when the table is not empty; choose it from the dry-run report."
+        type: string
+        required: false
+      min_count:
+        description: "Optional absolute minimum number of cinemas."
+        type: string
+        required: false
 permissions:
   contents: read
+concurrency:
+  group: radar-cinema-import
+  cancel-in-progress: false
 jobs:
-  import:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+  prepare:
+    name: Extract and validate (no credentials)
+    # Pinned: ubuntu-latest moves to a new image on 2026-10-19 (runner notice in the last import run).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: test/horror-radar-v14
+          persist-credentials: false
       - name: Install osmium and geometry parser
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y osmium-tool
           python -m pip install --user shapely==2.1.2
+      - name: Test import script
+        run: python -m unittest discover -s scripts/tests -v
       - name: Download Italy OpenStreetMap extract
         run: curl --fail --location --retry 3 --connect-timeout 30 -o italy.osm.pbf https://download.geofabrik.de/europe/italy-latest.osm.pbf
       - name: Filter cinemas and export GeoJSON sequence
@@ -45,10 +69,45 @@ jobs:
           if counts["features"]==0:raise RuntimeError("Osmium exported no features")
           if not any(s["id_pattern"] for s in samples):raise RuntimeError("OSM identifiers missing: refusing import")
           PY
+      - name: Validate (dry run, no network)
+        env:
+          MIN_COUNT: ${{ inputs.min_count }}
+        run: |
+          python scripts/import_radar_cinemas.py cinemas.geojsonseq --dry-run ${MIN_COUNT:+--min-count "$MIN_COUNT"} --summary-out dry-run-summary.json
+          { echo '### Dry-run summary'; echo '```json'; cat dry-run-summary.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Hand the validated export to the import job
+        if: inputs.mode == 'import'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: radar-cinemas-geojsonseq
+          path: cinemas.geojsonseq
+          retention-days: 1
+          if-no-files-found: error
+
+  import:
+    name: Import to Supabase
+    needs: prepare
+    if: inputs.mode == 'import' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Secrets live in this environment; it must require a reviewer and allow only main.
+    environment: radar-import
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install geometry parser
+        run: python -m pip install --user shapely==2.1.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: radar-cinemas-geojsonseq
       - name: Import to Supabase
         env:
           SUPABASE_URL: ${{ secrets.HORRIFY_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.HORRIFY_SUPABASE_SERVICE_ROLE_KEY }}
+          MAX_DROP_PERCENT: ${{ inputs.max_drop_percent }}
+          MIN_COUNT: ${{ inputs.min_count }}
         run: |
           test -n "$SUPABASE_URL" && test -n "$SUPABASE_SERVICE_ROLE_KEY"
-          python scripts/import_radar_cinemas.py cinemas.geojsonseq
+          python scripts/import_radar_cinemas.py cinemas.geojsonseq ${MAX_DROP_PERCENT:+--max-drop-percent "$MAX_DROP_PERCENT"} ${MIN_COUNT:+--min-count "$MIN_COUNT"} --summary-out import-summary.json
+          { echo '### Import summary'; echo '```json'; cat import-summary.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
