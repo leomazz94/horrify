@@ -152,3 +152,39 @@ test('service role client is limited to the radar tables', () => {
   assert.equal(scoped.storage, undefined);
   assert.ok(Object.isFrozen(scoped));
 });
+
+test('safeFetch allowDestination: every hop is checked (host, scheme, port) before it is requested', async () => {
+  const net = fakeNet({
+    'https://cinema.example.it/other': moved('https://other.example.it/x'),
+    'https://cinema.example.it/downgrade': moved('http://cinema.example.it/'),
+    'https://cinema.example.it/ok': moved('/final'),
+    'https://cinema.example.it/final': page('fine'),
+  }, { 'cinema.example.it': ['93.184.216.34'], 'other.example.it': ['93.184.216.35'] });
+  const pinned = createSafeFetch({ ...net, allowDestination: u => u.protocol === 'https:' && u.hostname === 'cinema.example.it' && (u.port === '' || u.port === '443') });
+  await assertBlocked(pinned('https://cinema.example.it/other'), 'destination_not_allowed_for_source');
+  await assertBlocked(pinned('https://cinema.example.it/downgrade'), 'destination_not_allowed_for_source');
+  await assertBlocked(pinned('http://cinema.example.it/'), 'destination_not_allowed_for_source');
+  await assertBlocked(pinned('https://other.example.it/'), 'destination_not_allowed_for_source');
+  assert.deepEqual(net.fetched.map(f => f.href), ['https://cinema.example.it/other', 'https://cinema.example.it/downgrade'], 'refused destinations were never requested');
+  const { response, url } = await pinned('https://cinema.example.it/ok');
+  assert.deepEqual([url, await response.text()], ['https://cinema.example.it/final', 'fine']);
+});
+
+test('safeFetch without allowDestination keeps the previous behaviour (any public host, http allowed)', async () => {
+  const net = fakeNet({ 'https://cinema.example.it/': moved('https://other.example.it/x'), 'https://other.example.it/x': page('elsewhere') },
+    { 'cinema.example.it': ['93.184.216.34'], 'other.example.it': ['93.184.216.35'] });
+  const { response, url } = await createSafeFetch(net)('https://cinema.example.it/');
+  assert.deepEqual([url, await response.text()], ['https://other.example.it/x', 'elsewhere']);
+});
+
+test('readTextCapped with a signal: aborting stops a stalled body and throws the reason; no signal = unchanged', async () => {
+  const stalled = () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('<html>')); } }));
+  const signal = AbortSignal.timeout(150);
+  const started = Date.now();
+  await assert.rejects(readTextCapped(stalled(), 1000, { signal }), e => e.name === 'TimeoutError');
+  assert.ok(Date.now() - started < 2000);
+  const aborted = AbortSignal.abort(new Error('already aborted'));
+  await assert.rejects(readTextCapped(new Response('hello'), 1000, { signal: aborted }), /already aborted/);
+  assert.equal(await readTextCapped(new Response('ciao – città'), 1000), 'ciao – città');
+  assert.equal(await readTextCapped(new Response('ciao'), 1000, { signal: AbortSignal.timeout(5000) }), 'ciao', 'completed reads are not reported as aborted');
+});

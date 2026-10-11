@@ -7,6 +7,7 @@ export const OPERATOR_MODES = new Set([
   'parse_official_page', 'verify_genre', 'diagnose_tavily', 'diagnose_giometti_structure',
   'diagnose_18tickets_stage', 'diagnose_18tickets_pipeline', 'diagnose_18tickets_context',
   'diagnose_18tickets_structure', 'diagnose_18tickets_live', 'diagnose_18tickets_parser',
+  'diagnose_source_readonly',
 ]);
 
 export function classifyMode(mode) {
@@ -64,10 +65,15 @@ export async function readJsonBody(req, maxChars) {
 
 // Reads at most maxChars characters of a Request/Response body without buffering the rest.
 // Decodes as UTF-8 like Response.text(); 4 bytes per character is the UTF-8 upper bound.
-export async function readTextCapped(source, maxChars) {
+// Optional signal: when it aborts, the read stops and signal.reason is thrown (e.g. a TimeoutError).
+export async function readTextCapped(source, maxChars, { signal } = {}) {
   const body = source?.body;
   if (!body) return '';
   const maxBytes = maxChars * 4, reader = body.getReader(), chunks = [];
+  let interrupted = false;
+  const onAbort = () => { interrupted = true; reader.cancel(signal.reason).catch(() => {}); };
+  if (signal?.aborted) { await reader.cancel(signal.reason).catch(() => {}); throw signal.reason; }
+  signal?.addEventListener('abort', onAbort, { once: true });
   let total = 0;
   try {
     while (total < maxBytes) {
@@ -77,8 +83,10 @@ export async function readTextCapped(source, maxChars) {
       total += value.byteLength;
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     if (total >= maxBytes) await reader.cancel().catch(() => {});
   }
+  if (interrupted) throw signal.reason;
   const bytes = new Uint8Array(Math.min(total, maxBytes));
   let offset = 0;
   for (const chunk of chunks) {
@@ -198,7 +206,10 @@ export async function assertPublicDestination(raw, base, resolveHost) {
 
 // fetch() replacement for third-party pages: validates the destination, follows redirects manually
 // and re-validates every hop. One deadline covers the whole chain, like the original fetch timeout.
-export function createSafeFetch({ fetchImpl, resolveHost, maxRedirects = 5, log = (_event, _data) => {} }) {
+// allowDestination(url) is checked on every hop, redirects included, before the request is sent; it receives
+// the already validated URL (protocol, hostname, port) and can pin a caller to specific destinations.
+// Default: any public http(s) destination, as before.
+export function createSafeFetch({ fetchImpl, resolveHost, maxRedirects = 5, log = (_event, _data) => {}, allowDestination = (_url) => true }) {
   return async function safeFetch(rawUrl, { headers = {}, timeoutMs = 6500 } = {}) {
     const signal = AbortSignal.timeout(timeoutMs);
     let current = String(rawUrl), base;
@@ -209,6 +220,10 @@ export function createSafeFetch({ fetchImpl, resolveHost, maxRedirects = 5, log 
         try { host = new URL(current, base).hostname; } catch { /* unparsable */ }
         log('radar_destination_blocked', { host, reason: e.reason || 'unknown', hop });
         throw e;
+      }
+      if (!allowDestination(url)) {
+        log('radar_destination_blocked', { host: url.hostname, reason: 'destination_not_allowed_for_source', hop });
+        throw new DestinationBlockedError('destination_not_allowed_for_source');
       }
       const response = await fetchImpl(url.href, { headers, redirect: 'manual', signal });
       const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null;

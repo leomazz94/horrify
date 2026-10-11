@@ -14,6 +14,16 @@ Operators are the Supabase Auth user ids listed in the secret `RADAR_OPERATOR_US
 
 Every new mode must be added to `PUBLIC_MODES` or `OPERATOR_MODES` in `security.mjs`; the static test fails otherwise.
 
+### Read-only source diagnostic (`diagnose_source_readonly`)
+
+Operator-only. Body: `{ "mode": "diagnose_source_readonly", "source": "movieland-ancona", "today"?: "YYYY-MM-DD" }`.
+
+- Sources come only from the allowlist `DIAG_SOURCES` in `index.ts` (currently the 18tickets page of Movieland Ancona); any URL in the request is ignored.
+- One page per call, at most 2 redirects. Every hop, redirects included, is checked before it is requested (`allowDestination`): HTTPS only, the source host only, port 443 only; private addresses, other hosts and HTTP downgrades are refused.
+- One 6.5 s deadline covers the request, the redirects and the body; at most 1.5M characters are read (larger or endless bodies are cut and marked `truncated`).
+- No database client, no Tavily, nothing published. The report lists `source`, `fetchedAt`, `http`, `dates` (today and tomorrow) with `timezone: Europe/Rome`, `genreFilter: none` with a `scope` note (every genre is listed, no horror filter), `screenings` with `scheduleStatus: as_published_by_source` and `genreStatus: not_verified`, and `sideEffects`.
+- Errors are reported, not thrown, with the `phase` (`request` or `body`): `blocked_<reason>`, `timeout`, `network_error`, `http_<status>`, `body_read_failed`.
+
 ## Outbound requests
 
 Cinema pages (from `radar_cinemas.website`, from links found on those pages, or from operator input) are fetched only through `safeFetch`:
