@@ -1,0 +1,205 @@
+name: Deploy horror-radar-staging (manual, approval required)
+# Deploys exactly ONE Supabase Edge Function, horror-radar-staging, built from the reviewed files in
+# supabase/functions/horror-radar-test/ (index.ts, security.mjs) and checked against pinned SHA-256 values.
+# Manual start only; the deploy job waits for approval in the protected environment "supabase-staging-deploy".
+# Every other function in the project (horror-radar-test included) is compared before and after: any change fails the run.
+# Never add --prune, --yes or --no-verify-jwt: a guard step refuses them.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_function:
+        description: "Type exactly: horror-radar-staging"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: deploy-horror-radar-staging
+  cancel-in-progress: false
+env:
+  FUNCTION_NAME: horror-radar-staging
+  SOURCE_DIR: supabase/functions/horror-radar-test
+  # Reviewed package horror-radar-staging-59ec8c9 (commit 59ec8c9). Update only together with a reviewed code change.
+  EXPECTED_INDEX_SHA256: 902e6d2d58c028a6e8b679fdbe27bec732c076f23bb8389d424abc684977ece2
+  EXPECTED_SECURITY_SHA256: 4f3b68e17fa015adbc2689d1226b550609c0143eef83f9cfb9055c55d8978f48
+  # Supabase CLI v2.120.0 (2026-10-06), linux amd64; digest from the official release asset.
+  CLI_VERSION: 2.120.0
+  CLI_SHA256: 7074584113aa00495beeac661c41fb09f1ddd0a483cd7333894b0d080086dc6e
+  DO_NOT_TRACK: "1"
+  SUPABASE_TELEMETRY_DISABLED: "1"
+
+jobs:
+  verify:
+    name: Verify package and run offline tests (no credentials)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check confirmation input
+        env:
+          CONFIRM: ${{ inputs.confirm_function }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "$FUNCTION_NAME" ]; then echo "::error::Confirmation must be exactly $FUNCTION_NAME"; exit 1; fi
+      - name: Rebuild package and verify SHA-256
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/pkg"
+          mkdir -p "$pkg/supabase/functions/$FUNCTION_NAME"
+          cp "$SOURCE_DIR/index.ts" "$SOURCE_DIR/security.mjs" "$pkg/supabase/functions/$FUNCTION_NAME/"
+          cd "$pkg/supabase/functions/$FUNCTION_NAME"
+          printf '%s  index.ts\n%s  security.mjs\n' "$EXPECTED_INDEX_SHA256" "$EXPECTED_SECURITY_SHA256" | sha256sum --check --strict
+          test "$(ls -A "$pkg/supabase/functions")" = "$FUNCTION_NAME"
+          test "$(ls -A .)" = "$(printf 'index.ts\nsecurity.mjs')"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+      - name: Offline tests (Edge Function)
+        run: node --test supabase/functions/tests/horror-radar-test/*.test.mjs
+
+  deploy:
+    name: Deploy horror-radar-staging only
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Required reviewer, main only, admins cannot bypass. Holds SUPABASE_ACCESS_TOKEN (secret) and SUPABASE_PROJECT_REF (variable).
+    environment: supabase-staging-deploy
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Rebuild package and verify SHA-256 (again, in this job)
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/pkg"
+          mkdir -p "$pkg/supabase/functions/$FUNCTION_NAME"
+          cp "$SOURCE_DIR/index.ts" "$SOURCE_DIR/security.mjs" "$pkg/supabase/functions/$FUNCTION_NAME/"
+          cd "$pkg/supabase/functions/$FUNCTION_NAME"
+          printf '%s  index.ts\n%s  security.mjs\n' "$EXPECTED_INDEX_SHA256" "$EXPECTED_SECURITY_SHA256" | sha256sum --check --strict
+          test "$(ls -A "$pkg/supabase/functions")" = "$FUNCTION_NAME"
+          echo "PKG=$pkg" >> "$GITHUB_ENV"
+      - name: Install Supabase CLI (pinned version, verified checksum)
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/cli"
+          mkdir -p "$cli"
+          curl --fail --silent --show-error --location --retry 3 \
+            -o "$cli/cli.tar.gz" "https://github.com/supabase/cli/releases/download/v${CLI_VERSION}/supabase_${CLI_VERSION}_linux_amd64.tar.gz"
+          echo "$CLI_SHA256  $cli/cli.tar.gz" | sha256sum --check --strict
+          tar -xzf "$cli/cli.tar.gz" -C "$cli"
+          test "$("$cli/supabase" --version 2>/dev/null | head -n1)" = "$CLI_VERSION"
+          echo "$cli" >> "$GITHUB_PATH"
+      - name: Check credentials are configured (values never printed)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN" || { echo "::error::SUPABASE_ACCESS_TOKEN missing in environment supabase-staging-deploy"; exit 1; }
+          [[ "$PROJECT_REF" =~ ^[a-z]{20}$ ]] || { echo "::error::SUPABASE_PROJECT_REF missing or malformed"; exit 1; }
+      - name: Snapshot functions before deploy (read only)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$PROJECT_REF" --output-format json > "$RUNNER_TEMP/before.json"
+          # Stop BEFORE deploying if the list cannot be read: the after-deploy comparison would be meaningless.
+          python3 - "$RUNNER_TEMP/before.json" <<'PY'
+          import json, sys
+          slugs = {}
+          def walk(x):
+              if isinstance(x, dict):
+                  if isinstance(x.get("slug"), str): slugs[x["slug"]] = x.get("version")
+                  for v in x.values(): walk(v)
+              elif isinstance(x, list):
+                  for v in x: walk(v)
+          walk(json.load(open(sys.argv[1], encoding="utf-8")))
+          missing = [s for s in ("horror-radar-test", "horror-radar-staging") if s not in slugs]
+          if missing:
+              print("::error::function list unreadable or incomplete, missing: " + ", ".join(missing)); sys.exit(1)
+          print("functions before deploy:", ", ".join(f"{s} v{v}" for s, v in sorted(slugs.items())))
+          PY
+      - name: Deploy horror-radar-staging
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          args=(functions deploy "$FUNCTION_NAME" --workdir "$PKG" --project-ref "$PROJECT_REF" --use-api)
+          # Guard: exactly one function name, and none of the forbidden flags.
+          forbidden=("--pru""ne" "--y""es" "--no-verify-j""wt")
+          for a in "${args[@]}"; do for f in "${forbidden[@]}"; do [ "$a" != "$f" ] || { echo "::error::forbidden flag $f"; exit 1; }; done; done
+          [ "${args[2]}" = "horror-radar-staging" ] || { echo "::error::unexpected function name"; exit 1; }
+          supabase "${args[@]}"
+      - name: Snapshot functions after deploy and compare (other functions must be unchanged)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$PROJECT_REF" --output-format json > "$RUNNER_TEMP/after.json"
+          python3 - "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/after.json" "$FUNCTION_NAME" <<'PY'
+          import json, sys
+          def functions(path):
+              found = {}
+              def walk(x):
+                  if isinstance(x, dict):
+                      if isinstance(x.get("slug"), str):
+                          found[x["slug"]] = {k: x.get(k) for k in ("version", "updated_at", "status", "verify_jwt", "entrypoint_path", "import_map")}
+                      for v in x.values(): walk(v)
+                  elif isinstance(x, list):
+                      for v in x: walk(v)
+              walk(json.load(open(path, encoding="utf-8")))
+              return found
+          before, after, target = functions(sys.argv[1]), functions(sys.argv[2]), sys.argv[3]
+          problems = []
+          if not before or not after: problems.append("could not read the function list")
+          if "horror-radar-test" not in before: problems.append("production function horror-radar-test not found before deploy")
+          for slug in sorted(set(before) | set(after)):
+              if slug == target: continue
+              if before.get(slug) != after.get(slug): problems.append(f"{slug} changed: {before.get(slug)} -> {after.get(slug)}")
+          t = after.get(target)
+          if not t: problems.append(f"{target} missing after deploy")
+          elif t.get("verify_jwt") is False: problems.append(f"{target} has verify_jwt disabled")
+          print("functions compared:", ", ".join(sorted(s for s in before if s != target)))
+          print(f"{target}: version {before.get(target, {}).get('version')} -> {t.get('version') if t else None}, verify_jwt {t.get('verify_jwt') if t else None}")
+          if problems:
+              for p in problems: print("::error::" + p)
+              sys.exit(1)
+          print("OK: no function other than", target, "changed")
+          PY
+      - name: Download deployed staging source and verify SHA-256
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          check="$RUNNER_TEMP/downloaded"
+          mkdir -p "$check/supabase/functions"
+          supabase functions download "$FUNCTION_NAME" --workdir "$check" --project-ref "$PROJECT_REF" --use-api
+          # The download layout is not documented: locate each file by name and require exactly one copy.
+          find "$check" -type f -printf '%P\n'
+          for pair in "index.ts:$EXPECTED_INDEX_SHA256" "security.mjs:$EXPECTED_SECURITY_SHA256"; do
+            f="${pair%%:*}"; want="${pair#*:}"
+            mapfile -t hits < <(find "$check" -type f -name "$f")
+            [ "${#hits[@]}" -eq 1 ] || { echo "::error::expected exactly one $f in the deployed source, found ${#hits[@]}"; exit 1; }
+            got="$(sha256sum "${hits[0]}" | cut -d' ' -f1)"
+            norm="$(tr -d '\r' < "${hits[0]}" | sha256sum | cut -d' ' -f1)"
+            if [ "$got" = "$want" ]; then echo "$f: byte-identical"; elif [ "$norm" = "$want" ]; then echo "$f: identical except line endings"; else echo "::error::$f differs from the reviewed file"; exit 1; fi
+          done
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### horror-radar-staging deploy"
+            echo "- source commit: \`$GITHUB_SHA\`"
+            echo "- expected index.ts: \`$EXPECTED_INDEX_SHA256\`"
+            echo "- expected security.mjs: \`$EXPECTED_SECURITY_SHA256\`"
+            echo "- Supabase CLI: $CLI_VERSION (checksum verified)"
+            echo "- Manual checks left: Verify JWT on in the Dashboard, horror-radar-test date unchanged, staging-s1-s7.js 7/7."
+          } >> "$GITHUB_STEP_SUMMARY"
