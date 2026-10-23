@@ -11,6 +11,39 @@ const SERVICE_TABLES=["radar_cinemas","radar_movie_classification"];
 // Fails closed when DNS resolution is unavailable, so private targets cannot slip through unchecked.
 async function resolveHost(hostname:string){const dns=(Deno as any).resolveDns;if(typeof dns!=="function")throw new Error("dns_unavailable");const found=await Promise.allSettled([dns(hostname,"A"),dns(hostname,"AAAA")]);return found.flatMap((r:any)=>r.status==="fulfilled"?r.value:[])}
 const safeFetch=createSafeFetch({fetchImpl:fetch,resolveHost,log:(event:string,data:unknown)=>console.error(event,JSON.stringify(data))});
+// Read-only source diagnostic (operator mode diagnose_source_readonly): one allowlisted page, every hop (redirects
+// included) must be HTTPS on the source host and port 443; no database client, no Tavily, nothing published.
+// One deadline covers request, redirects and body. Screenings are listed for every genre, as published by the
+// source at fetchedAt; their genre is not verified here.
+const DIAG_SOURCES:Record<string,{url:string,host:string,platform:string}>={"movieland-ancona":{url:"https://ancona.movieland.18tickets.it/",host:"ancona.movieland.18tickets.it",platform:"18tickets"}};
+const DIAG_LIMITS={pages:1,maxRedirects:2,timeoutMs:6500,timeoutCovers:"request+redirects+body",maxChars:1500000,protocol:"https"};
+const isTimeout=(e:unknown)=>["TimeoutError","AbortError"].includes((e as any)?.name);
+async function diagnoseSourceReadonly(sourceId:string,today:string){
+ const source=DIAG_SOURCES[sourceId];
+ const deadline=AbortSignal.timeout(DIAG_LIMITS.timeoutMs);
+ const next=new Date(today+"T12:00:00Z");next.setUTCDate(next.getUTCDate()+1);
+ const dates=[today,next.toISOString().slice(0,10)];
+ const fetchSource=createSafeFetch({fetchImpl:fetch,resolveHost,maxRedirects:DIAG_LIMITS.maxRedirects,
+  allowDestination:(u:URL)=>u.protocol==="https:"&&u.hostname===source.host&&(u.port===""||u.port==="443"),
+  log:(event:string,data:unknown)=>console.error(event,JSON.stringify(data))});
+ const report:any={diagnostic:"source_readonly",version:"2",source:{id:sourceId,platform:source.platform,url:source.url},dates,timezone:"Europe/Rome",limits:DIAG_LIMITS,
+  genreFilter:"none",scope:"All films on the source page, every genre: no horror filter is applied.",
+  sideEffects:{databaseAccess:false,tavily:false,published:false},
+  verification:{schedule:"as_published_by_source_at_fetchedAt",genre:"not_verified"},fetchedAt:new Date().toISOString(),screenings:[]};
+ let page;
+ try{page=await fetchSource(source.url,{headers:{"User-Agent":UA,"Accept":"text/html"},timeoutMs:DIAG_LIMITS.timeoutMs})}
+ catch(e){return{...report,ok:false,phase:"request",error:e instanceof DestinationBlockedError?"blocked_"+e.reason:isTimeout(e)?"timeout":"network_error"}}
+ const r=page.response;
+ if(!r.ok){await r.body?.cancel().catch(()=>{});return{...report,ok:false,phase:"request",error:"http_"+r.status,http:{status:r.status,finalUrl:page.url}}}
+ let html;
+ try{html=await readTextCapped(r,DIAG_LIMITS.maxChars,{signal:deadline})}
+ catch(e){return{...report,ok:false,phase:"body",error:isTimeout(e)?"timeout":"body_read_failed",http:{status:r.status,finalUrl:page.url}}}
+ const screenings=parse18Tickets(html,dates).map((x:any)=>({title:x.title,date:x.date,showtimes:x.showtimes,sourceUrl:page.url,scheduleStatus:"as_published_by_source",genreStatus:"not_verified"}));
+ return{...report,ok:true,http:{status:r.status,finalUrl:page.url,chars:html.length,truncated:html.length>=DIAG_LIMITS.maxChars},
+  structure:{scheduleSections:(html.match(/id=["']schedule-\d+["']/g)||[]).length,timeBlocks:(html.match(/time-select__place/g)||[]).length},
+  counts:{titles:new Set(screenings.map((s:any)=>s.title)).size,screenings:screenings.length},screenings,
+  note:screenings.length?"Screenings parsed from the official ticketing page; not cross-checked and not published.":"No screenings parsed for these dates: none scheduled, or the page structure differs from the parser."}
+}
 
 
 function explicitScheduleDate(line:string):string|null{const m=line.match(/(?:^|[^\d])(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{2,4}))?(?!\d)/);if(!m)return null;const day=Number(m[1]),month=Number(m[2]),year=m[3]?Number(m[3]):2026;const yyyy=year<100?2000+year:year;if(day<1||day>31||month<1||month>12)return null;const iso=String(yyyy).padStart(4,"0")+"-"+String(month).padStart(2,"0")+"-"+String(day).padStart(2,"0");return new Date(iso+"T12:00:00Z").toISOString().slice(0,10)===iso?iso:null;}
@@ -156,6 +189,7 @@ const body=await readJsonBody(req,MAX_BODY_CHARS);if(!body.ok)return reply({erro
 const route=classifyMode(b.mode);if(!route)return reply({error:"unknown_mode"},400);
 if(route.access==="operator"){const auth=await authorizeOperator({authorization:req.headers.get("Authorization"),operatorIds:parseOperatorIds(Deno.env.get("RADAR_OPERATOR_USER_IDS")),getUser:verifyUserToken});if(!auth.ok){console.error("radar_operator_denied",JSON.stringify({requestId,mode:route.mode,reason:auth.error}));return reply({error:auth.error},auth.status)}isOperator=true}
 if(b.today!==undefined&&!isValidIsoDate(b.today))return reply({error:"invalid_date"},400);
+if(b?.mode==="diagnose_source_readonly"){const id=String(b?.source||"");if(!Object.hasOwn(DIAG_SOURCES,id))return reply({error:"unknown_source",allowed:Object.keys(DIAG_SOURCES)},400);return reply(await diagnoseSourceReadonly(id,String(b?.today||new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Rome",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()))))}
 if(b?.mode==="parse_official_page"){const url=String(b?.url||"");if(!/^https?:\/\//i.test(url))return reply({error:"valid_url_required"},400);const parsed=await inspectOfficialPage(url);const today=String(b?.today||new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Rome",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()));const next=new Date(today+"T12:00:00Z");next.setUTCDate(next.getUTCDate()+1);const tomorrow=next.toISOString().slice(0,10);const adaptive=adaptiveParse(parsed.url,parsed.html,[today,tomorrow]);const dated=adaptive.candidates;const verifiedResults:any[]=[];for(const item of dated.slice(0,12)){const g=await verifyGenre(item.title);if(g.isHorror&&g.confidence==="high"){verifiedResults.push({movieTitle:item.title,date:item.date,showtimes:item.showtimes,sourceType:"official_cinema",sourceUrl:parsed.url,sourceLabel:"Sito ufficiale del cinema",verificationWarning:null,genreConfidence:g.confidence,genreEvidence:g.evidence,genreCached:g.cached})}}return reply({service:"HORRIFY Horror Radar",version:"0.8-end-to-end",sourceType:"official_cinema",sourceUrl:parsed.url,targetDates:[today,tomorrow],candidateCount:parsed.candidates.length,dateBoundCount:dated.length,parserStrategy:adaptive.strategy,verifiedResults,rule:"Only date-bound screenings whose title is web-verified as horror are returned."})}
 if(b?.mode==="diagnose_giometti_structure"){const targets=[{city:"Ancona",url:"https://www.giomettirealestatecinema.it/cinema/multiplex-ancona/programmazione"},{city:"Tolentino",url:"https://www.giomettirealestatecinema.it/cinema/multiplex-tolentino/programmazione"},{city:"Jesi",url:"https://www.giomettirealestatecinema.it/cinema/multiplex-jesi/programmazione"}];const results=[];for(const t of targets){try{const p=await inspectOfficialPage(t.url);const h=p.html;const parsed=adaptiveParse(p.url,h,[new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Rome",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date())]);results.push({city:t.city,ok:true,finalUrl:p.url,htmlBytes:h.length,title:h.slice(Math.max(0,h.toLowerCase().indexOf("<title")),h.toLowerCase().indexOf("</title>")+8).slice(0,150),markers:["__NEXT_DATA__","application/ld+json","wp-json","film","spettacoli","programmazione","iframe"].map(x=>({marker:x,present:h.toLowerCase().includes(x.toLowerCase())})),sample:h.slice(0,850),parser:parsed.strategy,candidates:parsed.candidates.slice(0,4).map((x:any)=>({title:x.title,date:x.date,showtimes:x.showtimes}))})}catch(e){results.push({city:t.city,ok:false,error:String(e).slice(0,140)})}}return reply({diagnostic:"giometti_structure",results,notice:"Diagnostic only; no screenings published"})}
 if(b?.mode==="diagnose_18tickets_stage"){
