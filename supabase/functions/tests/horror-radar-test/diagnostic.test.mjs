@@ -34,7 +34,10 @@ test('valid schedule: screenings for today and tomorrow only, with provenance an
   const r = await call(s, ASK, { token: OPERATOR_TOKEN });
   assert.equal(r.status, 200);
   const d = r.json;
-  assert.equal(d.ok, true);
+  assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired], [true, 'schedule_found', true]);
+  assert.equal(d.http.contentType, 'text/html');
+  assert.equal(d.structure.recognized, true);
+  assert.deepEqual(d.protection, { indicators: [], headers: [], suspected: false });
   assert.deepEqual(d.dates, ['2026-10-11', '2026-10-12']);
   assert.deepEqual(d.source, { id: 'movieland-ancona', platform: '18tickets', url: SOURCE });
   assert.deepEqual(d.sideEffects, { databaseAccess: false, tavily: false, published: false });
@@ -62,7 +65,7 @@ test('reachable source without screenings for the dates', async () => {
   assert.deepEqual(d.screenings, []);
   assert.deepEqual(d.counts, { titles: 0, screenings: 0 });
   assert.ok(d.structure.scheduleSections > 0, 'page structure recognised, just nothing scheduled');
-  assert.match(d.note, /No screenings/);
+  assert.deepEqual([d.outcome, d.scheduleAcquired, d.structure.recognized], ['no_screenings_for_dates', false, true]);
   assert.equal(s.fetches.length, 1);
   sideEffectsAreZero(s, 'empty');
 });
@@ -71,7 +74,7 @@ test('source answers 403: reported, no retry, nothing else contacted', async () 
   const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html('Forbidden', 403) } });
   const r = await call(s, ASK, { token: OPERATOR_TOKEN });
   assert.equal(r.status, 200);
-  assert.deepEqual([r.json.ok, r.json.error, r.json.http.status], [false, 'http_403', 403]);
+  assert.deepEqual([r.json.ok, r.json.outcome, r.json.error, r.json.http.status], [false, 'http_error', 'http_403', 403]);
   assert.deepEqual(r.json.screenings, []);
   assert.equal(s.fetches.length, 1);
   sideEffectsAreZero(s, '403');
@@ -119,7 +122,7 @@ test('endless body: reading stops at the size limit, quickly, and is marked trun
   const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: streamed({ pull(c) { chunks++; c.enqueue(enc.encode('x'.repeat(65536))); } }) } });
   const started = Date.now();
   const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
-  assert.deepEqual([d.ok, d.http.truncated, d.http.chars], [true, true, 1500000]);
+  assert.deepEqual([d.ok, d.outcome, d.http.truncated, d.http.chars], [false, 'no_schedule_structure', true, 1500000]);
   assert.ok(chunks <= Math.ceil(1500000 * 4 / 65536) + 2, `stopped pulling after ${chunks} chunks`);
   assert.ok(Date.now() - started < 5000, 'did not wait for the deadline');
   sideEffectsAreZero(s, 'endless body');
@@ -141,19 +144,20 @@ test('HTTPS only: downgrades to HTTP are refused before being requested, on ever
   }
 });
 
-test('unexpected HTML: challenge page, JSON and oversized page are handled without errors', async () => {
+test('unexpected HTML: interstitial page, JSON and oversized page are classified, never reported as ok', async () => {
   const cases = {
-    challenge: html('<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>'),
-    json: json({ hello: 'world' }),
-    oversized: html('<div>' + 'x'.repeat(1_600_000) + '</div>'),
+    interstitial: [html('<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>'), 'no_schedule_structure', false],
+    json: [json({ hello: 'world' }), 'unexpected_content_type', false],
+    oversized: [html('<div>' + 'x'.repeat(1_600_000) + '</div>'), 'no_schedule_structure', true],
   };
-  for (const [name, route] of Object.entries(cases)) {
+  for (const [name, [route, outcome, truncated]] of Object.entries(cases)) {
     const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: route } });
     const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
-    assert.equal(d.ok, true, name);
+    assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired], [false, outcome, false], name);
     assert.deepEqual(d.screenings, [], name);
     assert.equal(d.structure.scheduleSections, 0, name);
-    assert.equal(d.http.truncated, name === 'oversized', name);
+    assert.equal(d.http.truncated, truncated, name);
+    if (name === 'interstitial') assert.equal(d.page.title, 'Just a moment...');
     if (name === 'oversized') assert.equal(d.http.chars, 1500000);
     sideEffectsAreZero(s, name);
   }
@@ -215,4 +219,103 @@ test('report never contains configured secrets', async () => {
   const text = (await call(s, ASK, { token: OPERATOR_TOKEN })).text;
   for (const secret of Object.values(TEST_ENV)) assert.ok(!text.includes(secret));
   assert.ok(!text.includes(OPERATOR_TOKEN));
+});
+
+// ---------------------------------------------------------------- response classification (v3)
+
+test('HTTP 202 is an anomaly, not a schedule and not automatically bot protection', async () => {
+  // Even a 202 that carries a perfectly parseable schedule must not be read as one.
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(VALID_PAGE, 202) } });
+  const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+  assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired, d.phase, d.http.status], [false, 'anomalous_status', false, 'response', 202]);
+  assert.deepEqual(d.screenings, []);
+  assert.deepEqual(d.protection, { indicators: [], headers: [], suspected: false }, 'no protection claimed without evidence');
+  assert.equal(d.structure.recognized, true, 'structure is still reported for analysis');
+  assert.equal(s.fetches.length, 1);
+  sideEffectsAreZero(s, '202 plain');
+});
+
+test('HTTP 202 with AWS WAF signals: still anomalous_status, with indicators, header flags and no secret values', async () => {
+  const body = '<html><head><title>Human Verification</title><script src="https://abc.token.awswaf.com/abc/challenge.js"></script></head><body><noscript>Please enable JavaScript</noscript></body></html>';
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(body, 202, { 'x-amzn-waf-action': 'challenge', 'set-cookie': 'aws-waf-token=SECRETCOOKIEVALUE123; Path=/' }) } });
+  const r = await call(s, ASK, { token: OPERATOR_TOKEN });
+  const d = r.json;
+  assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired], [false, 'anomalous_status', false]);
+  assert.deepEqual([...d.protection.indicators].sort(), ['aws_waf', 'javascript_required']);
+  assert.deepEqual(d.protection.headers, ['x-amzn-waf-action']);
+  assert.equal(d.protection.suspected, true);
+  assert.deepEqual([d.http.wafAction, d.http.headers['set-cookie'], d.http.headers['x-amzn-waf-action']], ['challenge', true, true]);
+  assert.equal(d.page.title, 'Human Verification');
+  assert.deepEqual([d.page.signals.scripts, d.page.signals.noscript], [1, true]);
+  for (const leak of ['SECRETCOOKIEVALUE123', 'aws-waf-token=', 'token.awswaf.com', 'challenge.js', '<script', '<noscript']) assert.ok(!r.text.includes(leak), 'leaked: ' + leak);
+  sideEffectsAreZero(s, '202 waf');
+});
+
+test('HTTP 200 verification page (Cloudflare signals) is suspected_protection_page', async () => {
+  const body = '<html><head><title>Attention Required</title></head><body><div id="cf-chl-widget"></div><script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script></body></html>';
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(body, 200, { 'cf-mitigated': 'challenge', 'cf-ray': 'abc-MXP' }) } });
+  const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+  assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired], [false, 'suspected_protection_page', false]);
+  assert.deepEqual(d.protection.indicators, ['cloudflare']);
+  assert.deepEqual(d.protection.headers, ['cf-mitigated']);
+  assert.equal(d.http.headers['cf-ray'], true, 'informational header reported as presence only');
+  assert.match(d.note, /Do not try to bypass/);
+  sideEffectsAreZero(s, 'cloudflare');
+});
+
+test('a real schedule wins over a generic word like "captcha" on the page', async () => {
+  const body = VALID_PAGE.replace('</body>', '<form class="login"><div class="g-recaptcha"></div></form></body>');
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(body) } });
+  const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+  assert.deepEqual([d.ok, d.outcome, d.scheduleAcquired, d.counts.screenings], [true, 'schedule_found', true, 3]);
+  assert.deepEqual(d.protection.indicators, ['captcha'], 'indicator still reported for transparency');
+});
+
+test('no_screenings_for_dates only with a complete, reliable structure', async () => {
+  const sectionOnly = '<html><a href="/film/1/"><h2 class="page-heading">Mammina</h2></a><div id="schedule-1"></div></html>';
+  const blocksOnly = '<html><div class="time-select__place">Sabato 11/10/2026</div></html>';
+  const noFilmLinks = '<html><div id="schedule-1"><div class="time-select__place">Lunedì 20/10/2026</div></div></html>';
+  for (const [name, body] of Object.entries({ sectionOnly, blocksOnly, noFilmLinks })) {
+    const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(body) } });
+    const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+    assert.deepEqual([d.ok, d.outcome, d.structure.recognized], [false, 'no_schedule_structure', false], name);
+  }
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(EMPTY_PAGE) } });
+  const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+  assert.deepEqual([d.ok, d.outcome, d.structure.recognized], [true, 'no_screenings_for_dates', true], 'complete structure');
+});
+
+test('title is cleaned: tags and control characters removed, length capped; content type reduced to the media type', async () => {
+  const title = '<b>Movieland</b>\u0000\u0007 Ancona\t\n' + 'x'.repeat(300);
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html('<html><head><title>' + title + '</title></head></html>', 200, { 'content-type': 'text/html; charset=UTF-8' }) } });
+  const d = (await call(s, ASK, { token: OPERATOR_TOKEN })).json;
+  assert.equal(d.http.contentType, 'text/html');
+  assert.ok(d.page.title.startsWith('Movieland Ancona x'), d.page.title.slice(0, 30));
+  assert.ok(d.page.title.length <= 120);
+  assert.ok(!/[<>\u0000-\u001f]/.test(d.page.title));
+});
+
+test('non-2xx responses keep header flags but the body is never read or returned', async () => {
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html('<html>BODY-NOT-TO-RETURN</html>', 503, { 'x-amzn-waf-action': 'block', 'retry-after': '120' }) } });
+  const r = await call(s, ASK, { token: OPERATOR_TOKEN });
+  assert.deepEqual([r.json.ok, r.json.outcome, r.json.error, r.json.http.wafAction, r.json.http.headers['retry-after']], [false, 'http_error', 'http_503', 'block', true]);
+  assert.ok(!r.text.includes('BODY-NOT-TO-RETURN'));
+  assert.equal(r.json.page, undefined);
+});
+
+test('unknown WAF action values are not echoed back', async () => {
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html('<html></html>', 202, { 'x-amzn-waf-action': 'weird-value-with-data-12345' }) } });
+  const r = await call(s, ASK, { token: OPERATOR_TOKEN });
+  assert.equal(r.json.http.wafAction, null);
+  assert.equal(r.json.http.headers['x-amzn-waf-action'], true);
+  assert.ok(!r.text.includes('weird-value-with-data-12345'));
+});
+
+test('report size stays small and carries no page markup', async () => {
+  const big = '<html><head><title>T</title></head><body><div class="c">' + 'y'.repeat(200) + '</div>' + '<script>var x=1</script>'.repeat(500) + '</body></html>';
+  const s = await loadHandler({ env: OPERATORS, dns: DNS, routes: { [SOURCE]: html(big) } });
+  const r = await call(s, ASK, { token: OPERATOR_TOKEN });
+  assert.ok(r.text.length < 4000, `report ${r.text.length} chars`);
+  assert.ok(!r.text.includes('<script') && !r.text.includes('var x=1'));
+  assert.equal(r.json.page.signals.scripts, 500);
 });

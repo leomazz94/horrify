@@ -19,8 +19,9 @@ concurrency:
 env:
   FUNCTION_NAME: horror-radar-staging
   SOURCE_DIR: supabase/functions/horror-radar-test
-  # Reviewed package horror-radar-staging-59ec8c9 (commit 59ec8c9). Update only together with a reviewed code change.
-  EXPECTED_INDEX_SHA256: 902e6d2d58c028a6e8b679fdbe27bec732c076f23bb8389d424abc684977ece2
+  # index.ts: diagnostic v3 (response classification); security.mjs unchanged since 59ec8c9.
+  # Update only together with a reviewed code change (SHA-256 of the LF file as stored in git).
+  EXPECTED_INDEX_SHA256: 4ea446d91a40b4e382d8f9132abb570fcb5e782cb3b6ebe4b66fee6cda65fa93
   EXPECTED_SECURITY_SHA256: 4f3b68e17fa015adbc2689d1226b550609c0143eef83f9cfb9055c55d8978f48
   # Supabase CLI v2.120.0 (2026-10-06), linux amd64; digest from the official release asset.
   CLI_VERSION: 2.120.0

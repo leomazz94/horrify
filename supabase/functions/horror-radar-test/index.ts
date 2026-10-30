@@ -13,11 +13,33 @@ async function resolveHost(hostname:string){const dns=(Deno as any).resolveDns;i
 const safeFetch=createSafeFetch({fetchImpl:fetch,resolveHost,log:(event:string,data:unknown)=>console.error(event,JSON.stringify(data))});
 // Read-only source diagnostic (operator mode diagnose_source_readonly): one allowlisted page, every hop (redirects
 // included) must be HTTPS on the source host and port 443; no database client, no Tavily, nothing published.
-// One deadline covers request, redirects and body. Screenings are listed for every genre, as published by the
-// source at fetchedAt; their genre is not verified here.
+// One deadline covers request, redirects and body. The report classifies the response in `outcome` and never
+// returns the page body, cookie values or full headers: only status, media type, size, a cleaned <title>, counts
+// and yes/no indicators. Screenings are listed for every genre, as published by the source; genre is not verified.
 const DIAG_SOURCES:Record<string,{url:string,host:string,platform:string}>={"movieland-ancona":{url:"https://ancona.movieland.18tickets.it/",host:"ancona.movieland.18tickets.it",platform:"18tickets"}};
 const DIAG_LIMITS={pages:1,maxRedirects:2,timeoutMs:6500,timeoutCovers:"request+redirects+body",maxChars:1500000,protocol:"https"};
 const isTimeout=(e:unknown)=>["TimeoutError","AbortError"].includes((e as any)?.name);
+// Known families of verification / bot-protection pages. Only the family name is reported, never the matched text.
+// A match is a hint to investigate, not proof; a 2xx status other than 200 (e.g. 202) is reported as anomalous_status.
+const DIAG_PROTECTION_MARKERS:Record<string,RegExp>={
+ aws_waf:/awswaf|aws-waf-token|challenge\.js/i,
+ cloudflare:/cf-chl|challenge-platform|cf_chl_opt|cf-browser-verification/i,
+ akamai:/_abck|bm-verify|ak_bmsc/i,
+ perimeterx:/px-captcha|_pxcaptcha|perimeterx/i,
+ datadome:/datadome/i,
+ imperva:/_incapsula_resource|incap_ses/i,
+ captcha:/captcha/i,
+ javascript_required:/enable javascript|javascript is required|(abilita|attiva)(re)? (il )?javascript/i,
+};
+const DIAG_PROTECTION_HEADERS=["x-amzn-waf-action","cf-mitigated","x-datadome"]; // a protection layer acted on the response
+const DIAG_INFO_HEADERS=["cf-ray","x-iinfo","set-cookie","retry-after"];        // presence only; values are never read
+const diagMediaType=(v:string|null)=>v?v.split(";")[0].trim().toLowerCase().slice(0,60):null;
+const diagTitle=(html:string)=>{const m=html.match(/<title[^>]*>([\s\S]{0,2000}?)<\/title>/i);if(!m)return null;const t=m[1].replace(/<[^>]*>/g," ").replace(/[\u0000-\u001f\u007f-\u009f]/g," ").replace(/\s+/g," ").trim().slice(0,120);return t||null};
+function diagResponseInfo(r:Response,finalUrl:string){
+ const headers:Record<string,boolean>={};for(const h of [...DIAG_PROTECTION_HEADERS,...DIAG_INFO_HEADERS])headers[h]=r.headers.has(h);
+ const waf=(r.headers.get("x-amzn-waf-action")||"").trim().toLowerCase();
+ return{status:r.status,finalUrl,contentType:diagMediaType(r.headers.get("content-type")),headers,wafAction:["challenge","captcha","block"].includes(waf)?waf:null} as any;
+}
 async function diagnoseSourceReadonly(sourceId:string,today:string){
  const source=DIAG_SOURCES[sourceId];
  const deadline=AbortSignal.timeout(DIAG_LIMITS.timeoutMs);
@@ -26,23 +48,36 @@ async function diagnoseSourceReadonly(sourceId:string,today:string){
  const fetchSource=createSafeFetch({fetchImpl:fetch,resolveHost,maxRedirects:DIAG_LIMITS.maxRedirects,
   allowDestination:(u:URL)=>u.protocol==="https:"&&u.hostname===source.host&&(u.port===""||u.port==="443"),
   log:(event:string,data:unknown)=>console.error(event,JSON.stringify(data))});
- const report:any={diagnostic:"source_readonly",version:"2",source:{id:sourceId,platform:source.platform,url:source.url},dates,timezone:"Europe/Rome",limits:DIAG_LIMITS,
+ const report:any={diagnostic:"source_readonly",version:"3",source:{id:sourceId,platform:source.platform,url:source.url},dates,timezone:"Europe/Rome",limits:DIAG_LIMITS,
   genreFilter:"none",scope:"All films on the source page, every genre: no horror filter is applied.",
   sideEffects:{databaseAccess:false,tavily:false,published:false},
-  verification:{schedule:"as_published_by_source_at_fetchedAt",genre:"not_verified"},fetchedAt:new Date().toISOString(),screenings:[]};
+  verification:{schedule:"as_published_by_source_at_fetchedAt",genre:"not_verified"},fetchedAt:new Date().toISOString(),scheduleAcquired:false,screenings:[]};
+ const fail=(outcome:string,phase:string,error:string,extra:any={})=>({...report,ok:false,outcome,phase,error,...extra});
  let page;
  try{page=await fetchSource(source.url,{headers:{"User-Agent":UA,"Accept":"text/html"},timeoutMs:DIAG_LIMITS.timeoutMs})}
- catch(e){return{...report,ok:false,phase:"request",error:e instanceof DestinationBlockedError?"blocked_"+e.reason:isTimeout(e)?"timeout":"network_error"}}
- const r=page.response;
- if(!r.ok){await r.body?.cancel().catch(()=>{});return{...report,ok:false,phase:"request",error:"http_"+r.status,http:{status:r.status,finalUrl:page.url}}}
+ catch(e){const error=e instanceof DestinationBlockedError?"blocked_"+e.reason:isTimeout(e)?"timeout":"network_error";return fail(error.startsWith("blocked_")?"blocked":error,"request",error)}
+ const r=page.response;const http=diagResponseInfo(r,page.url);
+ if(!r.ok){await r.body?.cancel().catch(()=>{});return fail("http_error","request","http_"+r.status,{http})}
  let html;
  try{html=await readTextCapped(r,DIAG_LIMITS.maxChars,{signal:deadline})}
- catch(e){return{...report,ok:false,phase:"body",error:isTimeout(e)?"timeout":"body_read_failed",http:{status:r.status,finalUrl:page.url}}}
+ catch(e){const error=isTimeout(e)?"timeout":"body_read_failed";return fail(error,"body",error,{http})}
+ http.chars=html.length;http.truncated=html.length>=DIAG_LIMITS.maxChars;
+ const signals={scripts:(html.match(/<script\b/gi)||[]).length,noscript:/<noscript\b/i.test(html),metaRefresh:/<meta[^>]+http-equiv=["']?refresh/i.test(html),
+  filmLinks:(html.match(/\/film\/\d+/g)||[]).length,scheduleSections:(html.match(/id=["']schedule-\d+["']/g)||[]).length,timeBlocks:(html.match(/time-select__place/g)||[]).length};
+ const indicators=Object.keys(DIAG_PROTECTION_MARKERS).filter(k=>DIAG_PROTECTION_MARKERS[k].test(html));
+ const protectionHeaders=DIAG_PROTECTION_HEADERS.filter(h=>http.headers[h]);
+ const protection={indicators,headers:protectionHeaders,suspected:indicators.length>0||protectionHeaders.length>0};
+ // Reliable structure = all three parts the 18tickets parser needs: schedule sections, dated time blocks, film links.
+ const recognized=signals.scheduleSections>0&&signals.timeBlocks>0&&signals.filmLinks>0;
+ const base={...report,http,page:{title:diagTitle(html),signals},protection,structure:{scheduleSections:signals.scheduleSections,timeBlocks:signals.timeBlocks,recognized}};
+ if(r.status!==200)return{...base,ok:false,outcome:"anomalous_status",phase:"response",note:"HTTP "+r.status+" is a 2xx status other than 200: the page is not read as a schedule. Protection indicators, if any, are listed separately and are not proof."};
+ if(http.contentType!=="text/html"&&http.contentType!=="application/xhtml+xml")return{...base,ok:false,outcome:"unexpected_content_type",phase:"response",note:"The source did not return HTML."};
  const screenings=parse18Tickets(html,dates).map((x:any)=>({title:x.title,date:x.date,showtimes:x.showtimes,sourceUrl:page.url,scheduleStatus:"as_published_by_source",genreStatus:"not_verified"}));
- return{...report,ok:true,http:{status:r.status,finalUrl:page.url,chars:html.length,truncated:html.length>=DIAG_LIMITS.maxChars},
-  structure:{scheduleSections:(html.match(/id=["']schedule-\d+["']/g)||[]).length,timeBlocks:(html.match(/time-select__place/g)||[]).length},
-  counts:{titles:new Set(screenings.map((s:any)=>s.title)).size,screenings:screenings.length},screenings,
-  note:screenings.length?"Screenings parsed from the official ticketing page; not cross-checked and not published.":"No screenings parsed for these dates: none scheduled, or the page structure differs from the parser."}
+ const counts={titles:new Set(screenings.map((s:any)=>s.title)).size,screenings:screenings.length};
+ if(screenings.length)return{...base,ok:true,scheduleAcquired:true,outcome:"schedule_found",counts,screenings,note:"Screenings parsed from the official ticketing page; not cross-checked and not published."};
+ if(protection.suspected)return{...base,ok:false,outcome:"suspected_protection_page",phase:"response",counts,note:"No schedule, and the page shows signs of a verification or bot-protection layer. Do not try to bypass it."};
+ if(recognized)return{...base,ok:true,outcome:"no_screenings_for_dates",counts,note:"Schedule structure recognised, but no screenings for these dates."};
+ return{...base,ok:false,outcome:"no_schedule_structure",phase:"response",counts,note:"No reliable schedule structure found in the page."};
 }
 
 
